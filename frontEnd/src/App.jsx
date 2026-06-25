@@ -1,237 +1,279 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { FiUpload, FiLoader } from 'react-icons/fi';
-import { Navbar, Footer, FileUpload, FileList, TextInput, SummaryResult } from './components/index';
-import { checkJobStatus, submitSummarizationJob, extractText, extractTextFromFile, extractTextFromAudio, extractTextFromVideo } from './utils/api';
+import { FiUpload, FiLoader, FiTrash2 } from 'react-icons/fi';
+import { FileUpload, FileList, TextInput, SummaryResult } from './components/index';
+import {
+  checkJobStatus,
+  submitSummarizationJob,
+  extractText,
+  extractTextFromFile,
+  extractTextFromAudio,
+  extractTextFromVideo
+} from './utils/api';
 
 function App() {
   const [files, setFiles] = useState([]);
   const [text, setText] = useState('');
   const [summary, setSummary] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [activeInput, setActiveInput] = useState(null); // 'file' or 'text'
-  2
+  const [activeInput, setActiveInput] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  // Track active poll intervals across rendering frames
+  const pollIntervalRef = useRef(null);
+  // Track the active state during async operations to prevent race conditions
+  const activeInputRef = useRef(activeInput);
+
+  // Keep the ref synchronized with the state changes
+  useEffect(() => {
+    activeInputRef.current = activeInput;
+  }, [activeInput]);
+
+  // Clean up any hanging polling timers to prevent memory leaks
+  const clearPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => clearPolling(); // Cleanup on unmount
+  }, []);
+
+  const getWordCount = (str) => {
+    const trimmed = str.trim();
+    return trimmed === '' ? 0 : trimmed.split(/\s+/).length;
+  };
+
+  const handleClearAll = () => {
+    clearPolling();
+    setFiles([]);
+    setText('');
+    setSummary('');
+    setActiveInput(null);
+    setErrorMessage('');
+    setIsProcessing(false);
+  };
+
+  const getFileType = (file) => {
+    const mimeType = file.type || '';
+    if (mimeType.startsWith('audio/')) return 'audio';
+    if (mimeType.startsWith('video/')) return 'video';
+    if (mimeType === 'application/pdf') return 'pdf';
+    if (mimeType.startsWith('image/')) return 'image';
+    return 'unknown';
+  };
+
+  const handleSummarize = async (content) => {
+    try {
+      setSummary('');
+      setIsProcessing(true);
+      clearPolling();
+
+      const jobId = await submitSummarizationJob(content);
+      if (!jobId) {
+        setIsProcessing(false);
+        setErrorMessage('Failed to create summarization job.');
+        return;
+      }
+
+      pollIntervalRef.current = setInterval(async () => {
+        try {
+          // Check if user cleared inputs mid-poll sequence
+          if (!activeInputRef.current) {
+            clearPolling();
+            return;
+          }
+
+          const result = await checkJobStatus(jobId);
+
+          if (result) {
+            setSummary(result);
+            setIsProcessing(false);
+            clearPolling();
+          }
+        } catch (pollError) {
+          console.error('Error checking job status:', pollError);
+          setErrorMessage('Error verifying updates from summary engine.');
+          setIsProcessing(false);
+          clearPolling();
+        }
+      }, 3000);
+
+    } catch (error) {
+      console.error('Error generating summary:', error);
+      setErrorMessage('Failed to generate summary. Please try again.');
+      setIsProcessing(false);
+      clearPolling();
+    }
+  };
+
+  const handleSubmit = async () => {
+    setErrorMessage('');
+
+    if (activeInput === 'text') {
+      if (getWordCount(text) < 10) {
+        setErrorMessage(`Please enter at least 10 words to summarize. (Current: ${getWordCount(text)})`);
+        return;
+      }
+      await handleSummarize(text);
+    }
+    else if (activeInput === 'file' && files.length > 0) {
+      setIsProcessing(true);
+      const fileType = getFileType(files[0]);
+      // eslint-disable-next-line no-useless-assignment
+      let extractedText = '';
+
+      try {
+        switch (fileType) {
+          case 'pdf': extractedText = await extractTextFromFile(files[0]); break;
+          case 'image': extractedText = await extractText(files[0]); break;
+          case 'audio': extractedText = await extractTextFromAudio(files[0]); break;
+          case 'video': extractedText = await extractTextFromVideo(files[0]); break;
+          default:
+            setErrorMessage('Unsupported file type');
+            setIsProcessing(false);
+            return;
+        }
+
+        // RACE CONDITION FIX: Ensure user didn't hit 'Clear' while file was extracting
+        if (!activeInputRef.current || files.length === 0) {
+          setIsProcessing(false);
+          return;
+        }
+
+        if (extractedText && extractedText.trim().length > 0) {
+          await handleSummarize(extractedText);
+        } else {
+          setErrorMessage('Could not extract legible text content from the provided file.');
+          setIsProcessing(false);
+          setFiles([]);         // Drop failing file out of state
+          setActiveInput(null); // Unlock layout options
+        }
+      } catch (error) {
+        console.error('Extraction error:', error);
+        setErrorMessage('An error occurred during file parsing and processing.');
+        setIsProcessing(false);
+        setFiles([]);         // Drop failing file out of state
+        setActiveInput(null); // Unlock layout options
+      }
+    }
+  };
+
   const handleFileUpload = useCallback((uploadedFiles) => {
-    if (text.trim()) {
-      alert('Please clear the text input before uploading files');
-      return;
-    }
-    if (uploadedFiles.length > 1) {
-      alert('Please upload only one file at a time');
-      return;
-    }
+    if (text.trim() || uploadedFiles.length === 0) return;
     setFiles([uploadedFiles[0]]);
     setActiveInput('file');
   }, [text]);
 
-  const getFileType = (file) => {
-    const mimeType = file.type;
-    if (mimeType.startsWith('audio/')) {
-      return 'audio';
-    } else if (mimeType.startsWith('video/')) {
-      return 'video';
-    } else if (mimeType === 'application/pdf') {
-      return 'pdf';
-    } else if (mimeType.startsWith('image/')) {
-      return 'image';
-    } else {
-      return 'unknown';
-    }
-  };
-
-
-  const handleRemoveFile = useCallback((fileToRemove) => {
-    setFiles(prevFiles => {
-      const updatedFiles = prevFiles.filter(file => file !== fileToRemove);
-      if (updatedFiles.length === 0) {
-        setActiveInput(null);
-      }
-      return updatedFiles;
-    });
+  const handleRemoveFile = useCallback(() => {
+    setFiles([]);
+    setActiveInput(null);
+    setSummary('');
+    clearPolling();
+    setIsProcessing(false);
   }, []);
 
   const handleTextChange = useCallback((newText) => {
-    if (files.length > 0) {
-      alert('Please remove uploaded files before entering text');
-      return;
-    }
+    if (files.length > 0) return;
     setText(newText);
-    setActiveInput(newText.trim() ? 'text' : null);
+    // Explicit length lock prevents blank spaces bypassing input routing restrictions
+    setActiveInput(newText.length > 0 ? 'text' : null);
   }, [files]);
-
-
-  const handleSummarize = async (text) => {
-    try {
-      setSummary('');
-      setIsProcessing(true);
-      const jobId = await submitSummarizationJob(text);
-      if (!jobId) {
-        return;
-      }
-      setTimeout(async () => {
-        const result = await checkJobStatus(jobId);
-        if (!result) {
-          return;
-        }
-        setSummary(result);
-        setIsProcessing(false);
-      }, 5000);
-    } catch (error) {
-      console.error('Error generating summary:', error);
-      setIsProcessing(false);
-    };
-  }
-
-  const handleSubmit = async () => {
-    if (files.length === 0 && !text.trim()) {
-      alert('Please upload files or enter text to summarize');
-      return;
-    }
-    try {
-      if (text) {
-        handleSummarize(text);
-      }
-      else {
-        setIsProcessing(true)
-        const filetype = getFileType(files[0]);
-        switch (filetype) {
-          case 'pdf':
-            {
-              const res = await extractTextFromFile(files[0]);
-              if (res) handleSummarize(res);
-              break;
-            }
-          case 'image': {
-            const res = await extractText(files[0]);
-            if (res) handleSummarize(res);
-            break;
-          }
-          case 'audio':
-            {
-              const res = await extractTextFromAudio(files[0]);
-              if (res) handleSummarize(res);
-              break;
-            }
-          case 'video':
-            {
-              alert('Video file uploaded');
-              const res = await extractTextFromVideo(files[0]);
-              if (res) handleSummarize(res);
-              break;
-            }
-          default:
-            alert('Unknown file uploaded');
-            break;
-        }
-      }
-    } catch (error) {
-      console.error('Error generating summary:', error);
-    }
-  }
 
   const isFileInputDisabled = activeInput === 'text';
   const isTextInputDisabled = activeInput === 'file';
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
-      <Navbar />
+    <div className="min-h-screen flex flex-col bg-slate-100 text-slate-900 antialiased selection:bg-cyan-500/20">
 
-      <main className="flex-grow container mx-auto px-4 py-8">
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
+      <main className="flex-grow container mx-auto max-w-5xl px-6 py-12 space-y-10">
+        
+        {/* Dynamic Conversational Greeting & Project Overview Header */}
+        <motion.div 
+          initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="text-center mb-8"
+          className="text-center space-y-3 max-w-2xl mx-auto"
         >
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            Multimodal Summarization
+          <h1 className="text-3xl font-extrabold bg-gradient-to-r from-teal-700 to-cyan-700 bg-clip-text text-transparent tracking-wide">
+            Welcome to NeuroDigest
           </h1>
-          <p className="text-gray-600 text-lg">
-            Choose one input method:
-            <span className="font-semibold text-blue-600"> Upload Files </span>
-            or
-            <span className="font-semibold text-blue-600"> Enter Text</span>
+          <p className="text-sm sm:text-base text-slate-600 font-medium leading-relaxed">
+            Your friendly media processing workspace. Drop in a video, audio recording, PDF document, or paste a messy transcript block below, and let the AI find the core bullet points for you.
           </p>
         </motion.div>
 
-        <div className="grid gap-6 md:grid-cols-2">
+        {errorMessage && (
           <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.5 }}
-            className={`bg-white p-4 rounded-lg shadow-sm transition-opacity ${isFileInputDisabled ? 'opacity-50' : ''
-              }`}
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-4 bg-red-100 border border-red-300 text-red-900 text-sm rounded-xl text-center font-semibold shadow-sm"
           >
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">Option 1: Upload Files</h2>
-            <FileUpload
-              onFileUpload={handleFileUpload}
-              disabled={isFileInputDisabled}
-            />
-            {files.length > 0 && <FileList files={files} onRemove={handleRemoveFile} />}
-            {isFileInputDisabled && (
-              <p className="text-sm text-red-500 mt-2">
-                Please clear text input to upload files
-              </p>
-            )}
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.5 }}
-            className={`bg-white p-4 rounded-lg shadow-sm transition-opacity ${isTextInputDisabled ? 'opacity-50' : ''
-              }`}
-          >
-            <h2 className="text-xl font-semibold mb-4 text-gray-800">Option 2: Enter Text</h2>
-            <TextInput
-              text={text}
-              onTextChange={handleTextChange}
-              disabled={isTextInputDisabled}
-            />
-            {isTextInputDisabled && (
-              <p className="text-sm text-red-500 mt-2">
-                Please remove files to enter text
-              </p>
-            )}
-          </motion.div>
-        </div>
-
-        {(files.length > 0 || text.trim()) && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.3 }}
-            className="mt-8 text-center"
-          >
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={handleSubmit}
-              disabled={isProcessing}
-              className={`flex items-center justify-center gap-2 mx-auto
-                bg-blue-500 text-white px-8 py-4 rounded-lg font-medium text-lg
-                transform transition hover:bg-blue-600 hover:shadow-lg
-                ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
-            >
-              {isProcessing ? (
-                <>
-                  <FiLoader className="animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <FiUpload />
-                  Generate Summary
-                </>
-              )}
-            </motion.button>
+            {errorMessage}
           </motion.div>
         )}
 
-        <SummaryResult summary={summary} />
+        <div className="grid gap-8 md:grid-cols-2">
+          {/* Option 1: File Card */}
+          <div className={`group relative bg-slate-50 p-6 rounded-2xl border transition-all duration-300 ${isFileInputDisabled
+              ? 'opacity-40 border-slate-200 bg-slate-100'
+              : 'border-slate-300 shadow-md hover:border-teal-600 hover:shadow-lg'
+            }`}>
+            <h2 className="text-lg font-bold tracking-wide text-teal-700 mb-4 flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-teal-600" />
+              Option 1: Upload Files
+            </h2>
+            <div className="space-y-4">
+              <FileUpload onFileUpload={handleFileUpload} disabled={isFileInputDisabled} />
+              {files.length > 0 && <FileList files={files} onRemove={handleRemoveFile} />}
+            </div>
+          </div>
+
+          {/* Option 2: Text Card */}
+          <div className={`group relative bg-slate-50 p-6 rounded-2xl border transition-all duration-300 ${isTextInputDisabled
+              ? 'opacity-40 border-slate-200 bg-slate-100'
+              : 'border-slate-300 shadow-md hover:border-cyan-600 hover:shadow-lg'
+            }`}>
+            <h2 className="text-lg font-bold tracking-wide text-cyan-700 mb-4 flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-cyan-600" />
+              Option 2: Enter Text
+            </h2>
+            <TextInput text={text} onTextChange={handleTextChange} disabled={isTextInputDisabled} />
+          </div>
+        </div>
+
+        {/* Action Center */}
+        {activeInput && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="pt-4 text-center flex flex-col items-center gap-4"
+          >
+            <button
+              onClick={handleSubmit}
+              disabled={isProcessing}
+              className="relative group/btn flex items-center gap-2 overflow-hidden bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-bold px-10 py-3.5 rounded-xl transition-transform active:scale-95 disabled:opacity-50 shadow-md hover:shadow-xl"
+            >
+              {isProcessing ? <FiLoader className="animate-spin text-lg" /> : <FiUpload className="text-lg" />}
+              <span className="tracking-wide">{isProcessing ? 'Processing...' : 'Generate Summary'}</span>
+            </button>
+
+            <button
+              onClick={handleClearAll}
+              className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-rose-600 font-bold transition-colors duration-200"
+            >
+              <FiTrash2 size={14} /> Clear all inputs
+            </button>
+          </motion.div>
+        )}
+
+        {/* Results Window */}
+        <div className="pt-4">
+          <SummaryResult summary={summary} />
+        </div>
       </main>
 
-      <Footer />
     </div>
   );
 }

@@ -1,7 +1,6 @@
 import axios from "axios";
 
-const BASE_URL = "http://localhost:3000/api";
-
+const BASE_URL = import.meta.env.VITE_API_URL;
 // Function to submit a text summarization job
 const submitSummarizationJob = async (text) => {
   try {
@@ -17,14 +16,14 @@ const submitSummarizationJob = async (text) => {
 const checkJobStatus = async (jobId) => {
   try {
     const response = await axios.get(`${BASE_URL}/summarize/status/${jobId}`);
-    
+
     // UPDATED: Handle backend status strings safely
     if (response.data.status === "succeeded") {
       return response.data.summary; // Returns the actual summary text
     }
-    
+
     // Returns "running", "notStarted", or "failed"
-    return `Job status: ${response.data.status}`; 
+    return `Job status: ${response.data.status}`;
   } catch (error) {
     console.error("Error fetching job results:", error);
     throw error;
