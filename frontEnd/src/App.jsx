@@ -22,6 +22,13 @@ function App() {
   const pollIntervalRef = useRef(null);
   const activeInputRef = useRef(activeInput);
 
+    useEffect(() => {
+    fetch('https://ai-multi-model-summarizer-dlfh.onrender.com/ping')
+      .then(res => res.text())
+      .then(data => console.log(data))
+      .catch(err => console.error(err));
+  }, []); // Empty dependency array ensures it runs exactly 
+  
   useEffect(() => {
     activeInputRef.current = activeInput;
   }, [activeInput]);
