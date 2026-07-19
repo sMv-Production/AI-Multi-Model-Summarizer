@@ -43,7 +43,8 @@ export const extractImage = async (req, res) => {
 export const extractDocument = async (req, res) => {
     const endpoint = process.env.AZURE_DOCUMENT_ENDPOINT;
     const modelId = "prebuilt-read";
-    const apiVersion = "2024-07-31-preview";
+    // Update the retired preview version to the stable GA version
+    const apiVersion = "2024-11-30"; 
 
     try {
         const response = await axios.post(
