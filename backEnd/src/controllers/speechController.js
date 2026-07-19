@@ -5,6 +5,7 @@ export const extractAudio = async (req, res) => {
         const audioBlob = new Blob([req.file.buffer], { type: req.file.mimetype });
         formData.append("audio", audioBlob, req.file.originalname);
 
+        // Updated API version
         const response = await fetch(
             `${endpoint}/speechtotext/transcriptions:transcribe?api-version=2024-11-15`,
             {
@@ -34,6 +35,7 @@ export const extractVideo = async (req, res) => {
         const videoBlob = new Blob([req.file.buffer], { type: req.file.mimetype });
         formData.append("audio", videoBlob, "extracted_audio.wav");
 
+        // Updated API version
         const response = await fetch(
             `${endpoint}/speechtotext/transcriptions:transcribe?api-version=2024-11-15`,
             {
