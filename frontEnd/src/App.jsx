@@ -23,7 +23,7 @@ function App() {
   const activeInputRef = useRef(activeInput);
 
     useEffect(() => {
-    fetch('https://ai-multi-model-summarizer.vercel.app/ping')
+    fetch('https://ai-multi-model-summarizer-dlfh.onrender.com/ping')
       .then(res => res.text())
       .then(data => console.log(data))
       .catch(err => console.error(err));
